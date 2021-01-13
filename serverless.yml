@@ -1,0 +1,516 @@
+service: exportcwlogs
+# app and org for use with dashboard.serverless.com
+#app: your-app-name
+#org: your-org-name
+
+frameworkVersion: '>=1.71.1 <3.0.0'
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  memorySize: 128
+  timeout: 10
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  exportBucketStackName: ${opt:exportBucketStackName, 'infra-as-code-${self:provider.stage}-export-cwlogs-bucket'}
+  exportBucketName: ${cf:${self:provider.exportBucketStackName}.BucketName} #'Fn::ImportValue': ${self:provider.exportBucketStackName}-BucketName  
+  retentionInDays: ${opt:retentionInDays, 180}
+  notificationMail: ${opt:notificationMail, 'andreslavado@seti.com.co'}
+  selectCount: ${opt:selectCount, '20'}
+
+plugins:
+  - serverless-step-functions
+  - serverless-pseudo-parameters
+  - ./plugins/serverless-plugin-parser
+
+custom:
+  retentionInDaysInt: 
+    utils::parseInt: ${self:provider.retentionInDays}
+  retentionInDaysString:
+    utils::toString: ${self:provider.retentionInDays}
+
+package:
+  individually: true
+  exclude:
+    - ./**
+
+functions:
+  listLogGroups:
+    handler: src/ListLogGroups.main
+    name: exportcwlogs-${self:provider.stage}-listLogGroups
+    role: DescribeLogGroupsRole
+    package:
+      include:
+        - src/ListLogGroups.js
+  selectLogGroups:
+    handler: src/SelectLogGroups.main
+    name: exportcwlogs-${self:provider.stage}-selectLogGroups
+    role: EmptyRole
+    package:
+      include:
+        - src/SelectLogGroups.js
+    environment:
+      SELECT_COUNT: ${self:provider.selectCount}
+  createExportTask:
+    handler: src/CreateExportTask.main
+    name: exportcwlogs-${self:provider.stage}-createExportTask
+    role: ManageExportTaskRole
+    package:
+      include:
+        - src/CreateExportTask.js
+    environment:
+      BUCKET_NAME: ${self:provider.exportBucketName}
+  describeExportTask:
+    handler: src/DescribeExportTask.main
+    name: exportcwlogs-${self:provider.stage}-describeExportTask
+    role: ManageExportTaskRole
+    package:
+      include:
+        - src/DescribeExportTask.js
+  putRetentionPolicy:
+    handler: src/PutRetentionPolicy.main
+    name: exportcwlogs-${self:provider.stage}-putRetentionPolicy
+    role: PutRetentionPolicyRole
+    package:
+      include:
+        - src/PutRetentionPolicy.js
+    environment:
+      RETENTION_IN_DAYS: ${self:custom.retentionInDaysString}
+  sendNotification:
+    handler: src/SendNotification.main
+    name: exportcwlogs-${self:provider.stage}-sendNotification
+    role: SendNotificationRole
+    package:
+      include:
+        - src/SendNotification.js
+    environment:
+      TOPIC_ARN: !Ref NotificationTopic
+  passFailedToPending:
+    handler: src/PassFailedToPending.main
+    name: exportcwlogs-${self:provider.stage}-passFailedToPending
+    role: EmptyRole
+    package:
+      include:
+        - src/PassFailedToPending.js
+  launchExportExecution:
+    handler: src/LaunchExportExecution.main
+    name: exportcwlogs-${self:provider.stage}-launchExportExecution
+    role: LaunchSFNExecutionRole
+    package:
+      include:
+        - src/LaunchExportExecution.js
+  moveExportedLogs:
+    handler: src/MoveExportedLogs.main
+    name: exportcwlogs-${self:provider.stage}-moveExportedLogs
+    role: MoveS3FilesRole
+    events:
+      - s3: 
+          bucket: ${self:provider.exportBucketName}
+          existing: true
+          event: s3:ObjectCreated:Put
+          rules:
+            - suffix: .gz
+    package:
+      include:
+        - src/MoveExportedLogs.js        
+
+stepFunctions:
+  stateMachines:
+    exportCloudWatchLogsProcess:
+      events:
+        - schedule:
+            name: exportcwlogs-${self:provider.stage}-exportCloudWatchLogsSchedule
+            #rate: rate(10 minutes)
+            rate: cron(0 5 L * ? *)
+            enabled: true
+            input:
+              origin: 'Automated launch'
+      name: exportcwlogs-${self:provider.stage}-exportCloudWatchLogsProcess
+      definition:
+        Comment: "Export cloudwatch logs to S3"
+        StartAt: choiceStartOrContinue
+        States:
+          choiceStartOrContinue:
+            Type: Choice
+            Choices:
+              - Variable: '$.pendingLogGroups'
+                IsPresent: false
+                Next: sendStartNotificationFunc
+            Default: passToSelect
+          passToSelect:
+            Type: Pass
+            Parameters:
+              logGroups.$: '$.pendingLogGroups'
+            Next: selectLogGroupsFunc
+          sendStartNotificationFunc:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [sendNotification, Arn]
+            Parameters:
+              message: 'Se ha iniciado la exportación de logs a S3'
+            Next: listLogGroupsFunc
+          listLogGroupsFunc:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [listLogGroups, Arn]
+            Next: selectLogGroupsFunc
+          selectLogGroupsFunc:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [selectLogGroups, Arn]
+            Next: exportTaskIterator
+          exportTaskIterator:
+            Type: Map
+            InputPath: '$'
+            ItemsPath: '$.selectedLogGroups'
+            MaxConcurrency: 1
+            Iterator:
+              StartAt: choiceExport
+              States:
+                choiceExport:
+                  Type: Choice
+                  Choices:
+                    - Variable: '$.storedBytes'
+                      NumericGreaterThan: 0
+                      Next: createExportTaskFunc
+                  Default: endSuccessIteration
+                createExportTaskFunc:
+                  Type: Task
+                  Resource:
+                    Fn::GetAtt: [createExportTask, Arn]
+                  Next: waitExportTask
+                  Retry:
+                    - ErrorEquals: 
+                      - LimitExceededException
+                      IntervalSeconds: 60
+                      MaxAttempts: 5
+                      BackoffRate: 3
+                  Catch:
+                    - ErrorEquals:
+                      - States.ALL
+                      Next: sendErrorNotificationFunc
+                      ResultPath: '$.error'
+                waitExportTask:
+                  Type: Wait
+                  Seconds: 30
+                  Next: describeExportTaskFunc
+                describeExportTaskFunc:
+                  Type: Task
+                  Resource:
+                    Fn::GetAtt: [describeExportTask, Arn]
+                  Next: choiceWait
+                  Catch:
+                    - ErrorEquals:
+                      - States.ALL
+                      Next: waitExportTask
+                      ResultPath: '$.error'
+                choiceWait:
+                  Type: Choice
+                  Choices:
+                    - Or:
+                      - Variable: '$.status.code'
+                        StringEquals: 'RUNNING'
+                      - Variable: '$.status.code'
+                        StringMatches: 'PENDING*'
+                      Next: waitExportTask
+                  Default: endSuccessIteration    
+                endSuccessIteration:
+                  Type: Pass
+                  OutputPath: null
+                  End: true
+                sendErrorNotificationFunc:
+                  Type: Task
+                  Resource:
+                    Fn::GetAtt: [sendNotification, Arn]
+                  Parameters:
+                    subject: 'Error: ha fallado una tarea de exportación de logs'
+                    error_data.$: '$'
+                  Next: endErrorIteration
+                endErrorIteration:
+                  Type: Pass
+                  End: true
+            ResultPath: '$.failedLogGroups'
+            Next: passFailedToPendingFunc
+          passFailedToPendingFunc:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [passFailedToPending, Arn]
+            Next: choiceEndOrContinue
+          choiceEndOrContinue:
+            Type: Choice
+            Choices:
+              - Variable: '$.pendingLogGroups'
+                IsPresent: true
+                Next: launchExportExecutionFunc
+            Default: sendEndNotificationFunc
+          sendEndNotificationFunc:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [sendNotification, Arn]
+            Parameters:
+              message: 'Se ha concluido la exportación de logs a S3'
+            Next: endProcess
+          launchExportExecutionFunc:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [launchExportExecution, Arn]
+            Parameters:
+              stateMachineArn.$: "$$.StateMachine.Id"
+              pendingLogGroups.$: "$.pendingLogGroups"
+            Next: endProcess
+          endProcess:
+            Type: Pass
+            End: true
+    putRetentionPolicyProcess:
+      events:
+        - schedule:
+            name: exportcwlogs-${self:provider.stage}-putRetentionPolicySchedule
+            rate: cron(0 5 ? * L *)
+            enabled: true
+            input:
+              origin: 'Automated launch'
+      name: exportcwlogs-${self:provider.stage}-putRetentionPolicyProcess
+      definition:
+        Comment: "Put retention policy to log groups"
+        StartAt: listLogGroupsFunc
+        States:
+          listLogGroupsFunc:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [listLogGroups, Arn]
+            Next: putRetentionPolicyIterator
+          putRetentionPolicyIterator:
+            Type: Map
+            InputPath: '$'
+            ItemsPath: '$.logGroups'
+            MaxConcurrency: 5
+            Iterator:
+              StartAt: choicePutRetention
+              States:
+                choicePutRetention:
+                  Type: Choice
+                  Choices:
+                    - And:
+                      - Variable: '$.retentionInDays'
+                        IsPresent: true
+                      - Variable: '$.retentionInDays'
+                        NumericGreaterThan: ${self:custom.retentionInDaysInt}
+                      Next: putRetentionPolicyFunc
+                    - Variable: '$.retentionInDays'
+                      IsPresent: false
+                      Next: putRetentionPolicyFunc
+                  Default: endIteration
+                putRetentionPolicyFunc:
+                  Type: Task
+                  Resource:
+                    Fn::GetAtt: [putRetentionPolicy, Arn]
+                  Next: endIteration
+                  Retry:
+                    - ErrorEquals: 
+                      - States.ALL
+                      IntervalSeconds: 60
+                      MaxAttempts: 3
+                      BackoffRate: 2
+                  Catch:
+                    - ErrorEquals:
+                      - States.ALL
+                      Next: endIteration
+                endIteration:
+                  Type: Pass
+                  End: true
+            ResultPath: null
+            End: true
+# CloudFormation
+resources:
+  Resources:
+    DescribeLogGroupsRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Describe log groups'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Path: /
+        RoleName: exportcwlogs-${self:provider.stage}-DescribeLogGroupsRole
+    ManageExportTaskRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Manage export task'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Path: /
+        Policies:
+        - PolicyName: 'manage-export-task'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateExportTask'
+                  - 'logs:DescribeExportTasks'
+                  - 'logs:CancelExportTask'
+                Resource: '*'
+        RoleName: exportcwlogs-${self:provider.stage}-ManageExportTaskRole
+    PutRetentionPolicyRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Put retention policy for log groups'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Path: /
+        Policies:
+        - PolicyName: 'put-retention-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:PutRetentionPolicy'
+                Resource: '*'
+        RoleName: exportcwlogs-${self:provider.stage}-PutRetentionPolicyRole
+    NotificationTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        DisplayName: exportcwlogs-${self:provider.stage}-NotificationTopic
+        TopicName: exportcwlogs-${self:provider.stage}-NotificationTopic
+        Subscription:
+          - Protocol: email
+            Endpoint: ${self:provider.notificationMail}
+    SendNotificationRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Send export logs notification'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Path: /
+        Policies:
+        - PolicyName: 'send-notification-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sns:Publish'
+                Resource: !Ref NotificationTopic
+        RoleName: exportcwlogs-${self:provider.stage}-SendNotificationRole
+    LaunchSFNExecutionRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Launch SFN Execution'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Path: /
+        Policies:
+        - PolicyName: 'launch-execution-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'states:StartExecution'
+                Resource: 'arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:stateMachine:*'
+        RoleName: exportcwlogs-${self:provider.stage}-LaunchSFNExecutionRole
+    MoveS3FilesRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Move S3 Files'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Path: /
+        Policies:
+        - PolicyName: 'move-s3-files-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:DeleteObject'
+                  - 's3:DeleteObjectTagging'
+                  - 's3:DeleteObjectVersion'
+                  - 's3:DeleteObjectVersionTagging'
+                  - 's3:GetObject'
+                  - 's3:GetObjectTagging'
+                  - 's3:PutObject'
+                  - 's3:PutObjectTagging'
+                Resource:
+                  - !Join
+                    - ''
+                    - - 'arn:aws:s3:::'
+                      - ${self:provider.exportBucketName}
+                  - !Join
+                    - ''
+                    - - 'arn:aws:s3:::'
+                      - ${self:provider.exportBucketName}
+                      - '/*'
+        RoleName: exportcwlogs-${self:provider.stage}-MoveS3FilesRole
+    EmptyRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Empty Role'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Path: /
+        RoleName: exportcwlogs-${self:provider.stage}-EmptyRole

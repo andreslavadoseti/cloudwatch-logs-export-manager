@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  stage:
+    Type: String
+    Default: 'dev'
+  customer:
+    Type: String
+    Default: 'banistmo'
+Resources:
+  ExportBucket:
+      Type: AWS::S3::Bucket
+      DeletionPolicy: Retain
+      Properties: 
+        AccessControl: BucketOwnerFullControl 
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+        BucketName: !Sub '${customer}-almacenamiento-exported-cwlogs-${stage}'
+        LifecycleConfiguration:
+          Rules:
+          - Id: S3IARule
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: STANDARD_IA
+  ExportBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    DeletionPolicy: Retain
+    Properties:
+      Bucket: !Ref ExportBucket
+      PolicyDocument:
+        Statement:
+          - Sid: GetBucketAclStatement
+            Action: 's3:GetBucketAcl'
+            Effect: Allow
+            Resource: !Sub 'arn:aws:s3:::${ExportBucket}'
+            Principal:
+              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
+          - Sid: PutObjectStatement
+            Action: 's3:PutObject'
+            Effect: Allow
+            Resource: !Sub 'arn:aws:s3:::${ExportBucket}/*'
+            Principal:
+              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
+            Condition:
+              StringEquals:
+                's3:x-amz-acl': 'bucket-owner-full-control'
+Outputs:
+  BucketName:
+    Value: !Ref ExportBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'

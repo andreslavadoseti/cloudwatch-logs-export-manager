@@ -1,0 +1,10 @@
+[
+    {
+        "ParameterKey": "stage",
+        "ParameterValue": "$(stage)"
+    },
+    {
+        "ParameterKey": "customer",
+        "ParameterValue": "$(customer)"
+    }
+]
