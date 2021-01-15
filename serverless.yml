@@ -16,7 +16,7 @@ provider:
   exportBucketName: ${cf:${self:provider.exportBucketStackName}.BucketName} #'Fn::ImportValue': ${self:provider.exportBucketStackName}-BucketName  
   retentionInDays: ${opt:retentionInDays, 180}
   notificationMail: ${opt:notificationMail, 'andreslavado@seti.com.co'}
-  selectCount: ${opt:selectCount, '20'}
+  selectCount: ${opt:selectCount, '10'}
 
 plugins:
   - serverless-step-functions
