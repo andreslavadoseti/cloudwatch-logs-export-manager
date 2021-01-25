@@ -5,3 +5,4 @@ npm update -g serverless
 npm install serverless-step-functions
 npm install serverless-pseudo-parameters
 npm i @teleology/fp
+npm i dateformat

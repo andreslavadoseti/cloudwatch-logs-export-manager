@@ -8,15 +8,19 @@ exports.main = function (event, context, callback) {
   }
   cloudwatchlogs.describeExportTasks(params, function(err, data) {
     if (err) {
-      callback(Error(err));
+      callback(err);
     }
     else {
+      let found = false;
       for (let i in data.exportTasks){
         if(data.exportTasks[i].taskId == params.taskId){
           callback(null, data.exportTasks[i]); // successful response
+          found = true;
         }
       }
-      callback(new Error('Task not found'));
+      if(!found) {
+        callback(new Error('Task not found'));
+      }
     }
   });
 };

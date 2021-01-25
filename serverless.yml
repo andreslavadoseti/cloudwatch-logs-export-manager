@@ -17,6 +17,8 @@ provider:
   retentionInDays: ${opt:retentionInDays, 180}
   notificationMail: ${opt:notificationMail, 'andreslavado@seti.com.co'}
   selectCount: ${opt:selectCount, '10'}
+  dateFormat: ${opt:dateFormat, 'yyyy-mm-dd HH:MM'}
+  dateFolderDelimiter: ${opt:dateFolderDelimiter, ' to '}
 
 plugins:
   - serverless-step-functions
@@ -112,7 +114,12 @@ functions:
             - suffix: .gz
     package:
       include:
-        - src/MoveExportedLogs.js        
+        - src/MoveExportedLogs.js
+        - src/DescribeExportTask.js
+        - node_modules/dateformat/**
+    environment:
+      DATE_FORMAT: ${self:provider.dateFormat}
+      DATE_FOLDER_DELIMITER: ${self:provider.dateFolderDelimiter}
 
 stepFunctions:
   stateMachines:
@@ -470,6 +477,7 @@ resources:
         Description: 'Move S3 Files'
         ManagedPolicyArns: 
           - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+          - arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess
         Path: /
         Policies:
         - PolicyName: 'move-s3-files-policy'
