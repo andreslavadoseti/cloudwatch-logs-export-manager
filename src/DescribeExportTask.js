@@ -1,7 +1,6 @@
 'use strict';
 const AWS = require('aws-sdk');
 var cloudwatchlogs = new AWS.CloudWatchLogs();
-const bucketName = process.env.BUCKET_NAME;
 
 exports.main = function (event, context, callback) {
   let params = {
