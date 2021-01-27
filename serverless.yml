@@ -33,7 +33,7 @@ custom:
   timeZone: ${opt:timeZone, 'America/Bogota'}
   exportRangeParameterName: ${opt:exportRangeParameterName, 'exportcwlogs-${self:provider.stage}-exportRangeParameterName'}
   defaultExportRange: ${opt:defaultExportRange, 'FROM_THE_BEGINNING_TO_LAST_MONTH'}
-  onlyLastMonthRange: 'ONLY_LAST_MONTH'
+  lastMonthRange: 'LAST_MONTH'
   logGroupMinAge: '5259600000'
 
 package:
@@ -157,7 +157,7 @@ stepFunctions:
             enabled: true
             input:
               origin: 'Automated launch'
-              EXPORT_RANGE: ${self:custom.onlyLastMonthRange}
+              EXPORT_RANGE: ${self:custom.lastMonthRange}
       name: exportcwlogs-${self:provider.stage}-exportCloudWatchLogsProcess
       definition:
         Comment: "Export cloudwatch logs to S3"
