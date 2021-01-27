@@ -7,14 +7,16 @@ const TIME_ZONE = process.env.TIME_ZONE;
 const BUCKET_NAME = process.env.BUCKET_NAME;
 const EXPORT_RANGE_PARAMETER_NAME = process.env.EXPORT_RANGE_PARAMETER_NAME;
 const DEFAULT_EXPORT_RANGE = process.env.DEFAULT_EXPORT_RANGE;
+const EXPORT_RANGE_PERIOD = process.env.EXPORT_RANGE_PERIOD;
+const EXPORT_RANGE_NUMBER = parseInt(process.env.EXPORT_RANGE_NUMBER);
 
 function createExportTask(event, exportRange, callback) {
   let logGroupName = event.logGroupName;
-  let lastMonthDate = moment().tz(TIME_ZONE).subtract(1, 'months');
-  let firstDay = lastMonthDate.clone().startOf('month');
-  let lastDay = lastMonthDate.clone().endOf('month');
-  let fromTime = firstDay.valueOf();
-  let toTime = lastDay.valueOf();
+  let today = moment().tz(TIME_ZONE);
+  let startRangeDate = today.clone().subtract(EXPORT_RANGE_NUMBER, EXPORT_RANGE_PERIOD).startOf('month');
+  let endRangeDate = today.clone().subtract(1, 'month').endOf('month');
+  let fromTime = startRangeDate.valueOf();
+  let toTime = endRangeDate.valueOf();
   if(exportRange === DEFAULT_EXPORT_RANGE){
     fromTime = event.creationTime; 
   }
