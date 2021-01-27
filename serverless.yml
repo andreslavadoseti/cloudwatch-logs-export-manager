@@ -180,6 +180,12 @@ stepFunctions:
             Resource:
               Fn::GetAtt: [setExportRangeParam, Arn]
             Next: sendStartNotificationFunc
+            Retry:
+              - ErrorEquals: 
+                - States.ALL
+                IntervalSeconds: 60
+                MaxAttempts: 3
+                BackoffRate: 2
           sendStartNotificationFunc:
             Type: Task
             Resource:
@@ -187,11 +193,23 @@ stepFunctions:
             Parameters:
               message: 'Se ha iniciado la exportación de logs a S3'
             Next: listLogGroupsFunc
+            Retry:
+              - ErrorEquals: 
+                - States.ALL
+                IntervalSeconds: 60
+                MaxAttempts: 3
+                BackoffRate: 2
           listLogGroupsFunc:
             Type: Task
             Resource:
               Fn::GetAtt: [listLogGroups, Arn]
             Next: selectLogGroupsFunc
+            Retry:
+              - ErrorEquals: 
+                - States.ALL
+                IntervalSeconds: 60
+                MaxAttempts: 3
+                BackoffRate: 2
           selectLogGroupsFunc:
             Type: Task
             Resource:
@@ -264,6 +282,12 @@ stepFunctions:
                     subject: 'Error: ha fallado una tarea de exportación de logs'
                     error_data.$: '$'
                   Next: endErrorIteration
+                  Retry:
+                    - ErrorEquals: 
+                      - States.ALL
+                      IntervalSeconds: 60
+                      MaxAttempts: 3
+                      BackoffRate: 2
                 endErrorIteration:
                   Type: Pass
                   End: true
@@ -288,6 +312,12 @@ stepFunctions:
             Parameters:
               message: 'Se ha concluido la exportación de logs a S3'
             Next: endProcess
+            Retry:
+              - ErrorEquals: 
+                - States.ALL
+                IntervalSeconds: 60
+                MaxAttempts: 3
+                BackoffRate: 2
           launchExportExecutionFunc:
             Type: Task
             Resource:
@@ -296,6 +326,12 @@ stepFunctions:
               stateMachineArn.$: "$$.StateMachine.Id"
               pendingLogGroups.$: "$.pendingLogGroups"
             Next: endProcess
+            Retry:
+              - ErrorEquals: 
+                - States.ALL
+                IntervalSeconds: 60
+                MaxAttempts: 3
+                BackoffRate: 2
           endProcess:
             Type: Pass
             End: true
@@ -317,6 +353,12 @@ stepFunctions:
             Resource:
               Fn::GetAtt: [listLogGroups, Arn]
             Next: putRetentionPolicyIterator
+            Retry:
+              - ErrorEquals: 
+                - States.ALL
+                IntervalSeconds: 60
+                MaxAttempts: 3
+                BackoffRate: 2
           putRetentionPolicyIterator:
             Type: Map
             InputPath: '$'
