@@ -1,13 +1,14 @@
 'use strict';
+const moment = require('moment-timezone');
+const TIME_ZONE = process.env.TIME_ZONE;
 const SELECT_COUNT = parseInt(process.env.SELECT_COUNT);
-const LOG_GROUP_MIN_AGE = parseInt(process.env.LOG_GROUP_MIN_AGE);
 
 exports.main = function (event, context, callback) {
   if ("logGroups" in event) {
-    let currentTimeMillis = new Date().getTime();
+    let endOfLastMonth = moment().tz(TIME_ZONE).subtract(1, 'months').endOf('month').valueOf();
     let logGroups = event.logGroups
       .filter(logGroup => {
-        return (logGroup.storedBytes > 0) && ((currentTimeMillis - logGroup.creationTime) >= LOG_GROUP_MIN_AGE)
+        return (logGroup.storedBytes > 0) && (logGroup.creationTime < endOfLastMonth)
       })
       .sort((logGroupA, logGroupB) => logGroupB.storedBytes - logGroupA.storedBytes);
     let selectedList = [];

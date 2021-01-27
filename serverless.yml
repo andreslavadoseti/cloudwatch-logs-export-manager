@@ -34,7 +34,6 @@ custom:
   exportRangeParameterName: ${opt:exportRangeParameterName, 'exportcwlogs-${self:provider.stage}-exportRangeParameterName'}
   defaultExportRange: ${opt:defaultExportRange, 'FROM_THE_BEGINNING_TO_LAST_MONTH'}
   lastMonthRange: 'LAST_MONTH'
-  logGroupMinAge: '5259600000'
 
 package:
   individually: true
@@ -66,9 +65,11 @@ functions:
     package:
       include:
         - src/SelectLogGroups.js
+        - node_modules/moment/**
+        - node_modules/moment-timezone/**
     environment:
       SELECT_COUNT: ${self:provider.selectCount}
-      LOG_GROUP_MIN_AGE: ${self:custom.logGroupMinAge}
+      TIME_ZONE: ${self:custom.timeZone}
   createExportTask:
     handler: src/CreateExportTask.main
     name: exportcwlogs-${self:provider.stage}-createExportTask

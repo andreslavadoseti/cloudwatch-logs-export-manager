@@ -66,9 +66,6 @@ var manageResponseAndMove = function (err, data) {
     let to = moment(data.to).tz(TIME_ZONE);
     let folder = from.format(DATE_FORMAT) + DATE_FOLDER_DELIMITER + to.format(DATE_FORMAT);
     moveParameters.pathArray[moveParameters.taskIdIndex] = folder;
-    // moveParameters.pathArray.splice(moveParameters.taskIdIndex, 1);
-    // let folderPos = moveParameters.pathArray.length - 1;
-    // moveParameters.pathArray.splice(folderPos, 0, folder);
     let destinationPath = moveParameters.pathArray.join('/');
     if (moveParameters.sourcePath.startsWith("/") && !destinationPath.startsWith("/")) {
       destinationPath = "/" + destinationPath;
