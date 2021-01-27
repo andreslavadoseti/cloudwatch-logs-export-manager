@@ -1,8 +1,9 @@
 'use strict';
 const AWS = require('aws-sdk');
 const describeExportTask = require('./DescribeExportTask')
-const dateFormat = require('dateformat');
-var s3 = new AWS.S3();
+const moment = require('moment-timezone');
+const TIME_ZONE = process.env.TIME_ZONE;
+const s3 = new AWS.S3();
 var functionCallback = null;
 var moveParameters = {};
 const DESCRIBE_MAX_TRIES = 3;
@@ -61,10 +62,13 @@ var manageResponseAndMove = function (err, data) {
     }
   }
   else {
-    let folder = dateFormat(new Date(data.from), DATE_FORMAT) + DATE_FOLDER_DELIMITER + dateFormat(new Date(data.to), DATE_FORMAT);
-    moveParameters.pathArray.splice(moveParameters.taskIdIndex, 1);
-    let folderPos = moveParameters.pathArray.length - 1;
-    moveParameters.pathArray.splice(folderPos, 0, folder);
+    let from = moment(data.from).tz(TIME_ZONE);
+    let to = moment(data.to).tz(TIME_ZONE);
+    let folder = from.format(DATE_FORMAT) + DATE_FOLDER_DELIMITER + to.format(DATE_FORMAT);
+    moveParameters.pathArray[moveParameters.taskIdIndex] = folder;
+    // moveParameters.pathArray.splice(moveParameters.taskIdIndex, 1);
+    // let folderPos = moveParameters.pathArray.length - 1;
+    // moveParameters.pathArray.splice(folderPos, 0, folder);
     let destinationPath = moveParameters.pathArray.join('/');
     if (moveParameters.sourcePath.startsWith("/") && !destinationPath.startsWith("/")) {
       destinationPath = "/" + destinationPath;

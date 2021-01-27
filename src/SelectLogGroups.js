@@ -1,10 +1,14 @@
 'use strict';
 const SELECT_COUNT = parseInt(process.env.SELECT_COUNT);
+const LOG_GROUP_MIN_AGE = parseInt(process.env.LOG_GROUP_MIN_AGE);
 
 exports.main = function (event, context, callback) {
   if ("logGroups" in event) {
+    let currentTimeMillis = new Date().getTime();
     let logGroups = event.logGroups
-      .filter(logGroup => logGroup.storedBytes > 0)
+      .filter(logGroup => {
+        return (logGroup.storedBytes > 0) && ((currentTimeMillis - logGroup.creationTime) >= LOG_GROUP_MIN_AGE)
+      })
       .sort((logGroupA, logGroupB) => logGroupB.storedBytes - logGroupA.storedBytes);
     let selectedList = [];
     for (let index = 0; index < SELECT_COUNT; index++) {

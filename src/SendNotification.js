@@ -12,13 +12,14 @@ exports.main = function (event, context, callback) {
     if('error_data' in event){
         let error = JSON.stringify(event['error_data'], undefined, 4);
         message = 'La exportación del log group a S3 ha fallado.\n\nDETALLES DEL ERROR:\n\n'+error;
-        if(event['error_data'].error.Error === 'LimitExceededException'){
+        if(event['error_data'].error.Error === 'LimitExceededException' || 
+            event['error_data'].error.Error === 'Lambda.Unknown'){
             response = {
                 logGroupName: event['error_data'].logGroupName,
                 retentionInDays: event['error_data'].retentionInDays,
                 storedBytes: event['error_data'].storedBytes
             }
-            message += "\n\nLos errores de tipo \"LimitExceededException\" se pondran en lista de pendiente para ejecutar en la siguiente iteración."
+            message += "\n\nLos errores de este tipo se pondran en lista de pendiente para ejecutar en la siguiente iteración."
         } else {
             response = {}
         }

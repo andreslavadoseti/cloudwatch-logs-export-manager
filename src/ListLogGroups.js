@@ -9,7 +9,8 @@ function handleResponse(response, logGroups, callback) {
       return {
         "logGroupName": item.logGroupName,
         "retentionInDays": item.retentionInDays,
-        "storedBytes": item.storedBytes
+        "storedBytes": item.storedBytes,
+        "creationTime": item.creationTime
       };
     });
     callback(null, {

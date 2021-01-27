@@ -17,7 +17,7 @@ provider:
   retentionInDays: ${opt:retentionInDays, 180}
   notificationMail: ${opt:notificationMail, 'andreslavado@seti.com.co'}
   selectCount: ${opt:selectCount, '10'}
-  dateFormat: ${opt:dateFormat, 'yyyy-mm-dd HH:MM'}
+  dateFormat: ${opt:dateFormat, 'YYYY-MM-DD HH:mm'}
   dateFolderDelimiter: ${opt:dateFolderDelimiter, ' to '}
 
 plugins:
@@ -30,6 +30,11 @@ custom:
     utils::parseInt: ${self:provider.retentionInDays}
   retentionInDaysString:
     utils::toString: ${self:provider.retentionInDays}
+  timeZone: ${opt:timeZone, 'America/Bogota'}
+  exportRangeParameterName: ${opt:exportRangeParameterName, 'exportcwlogs-${self:provider.stage}-exportRangeParameterName'}
+  defaultExportRange: ${opt:defaultExportRange, 'FROM_THE_BEGINNING_TO_LAST_MONTH'}
+  onlyLastMonthRange: 'ONLY_LAST_MONTH'
+  logGroupMinAge: '5259600000'
 
 package:
   individually: true
@@ -37,6 +42,16 @@ package:
     - ./**
 
 functions:
+  setExportRangeParam:
+    handler: src/SetExportRangeParam.main
+    name: exportcwlogs-${self:provider.stage}-setExportRangeParam
+    role: PutSSMParameterRole
+    package:
+      include:
+        - src/SetExportRangeParam.js
+    environment:
+      EXPORT_RANGE_PARAMETER_NAME: ${self:custom.exportRangeParameterName}
+      DEFAULT_EXPORT_RANGE: ${self:custom.defaultExportRange}
   listLogGroups:
     handler: src/ListLogGroups.main
     name: exportcwlogs-${self:provider.stage}-listLogGroups
@@ -53,19 +68,26 @@ functions:
         - src/SelectLogGroups.js
     environment:
       SELECT_COUNT: ${self:provider.selectCount}
+      LOG_GROUP_MIN_AGE: ${self:custom.logGroupMinAge}
   createExportTask:
     handler: src/CreateExportTask.main
     name: exportcwlogs-${self:provider.stage}-createExportTask
-    role: ManageExportTaskRole
+    role: CreateExportTaskRole
+    timeout: 15
     package:
       include:
         - src/CreateExportTask.js
+        - node_modules/moment/**
+        - node_modules/moment-timezone/**
     environment:
       BUCKET_NAME: ${self:provider.exportBucketName}
+      TIME_ZONE: ${self:custom.timeZone}
+      EXPORT_RANGE_PARAMETER_NAME: ${self:custom.exportRangeParameterName}
+      DEFAULT_EXPORT_RANGE: ${self:custom.defaultExportRange}
   describeExportTask:
     handler: src/DescribeExportTask.main
     name: exportcwlogs-${self:provider.stage}-describeExportTask
-    role: ManageExportTaskRole
+    role: DescribeExportTaskRole
     package:
       include:
         - src/DescribeExportTask.js
@@ -105,6 +127,7 @@ functions:
     handler: src/MoveExportedLogs.main
     name: exportcwlogs-${self:provider.stage}-moveExportedLogs
     role: MoveS3FilesRole
+    timeout: 20
     events:
       - s3: 
           bucket: ${self:provider.exportBucketName}
@@ -116,8 +139,10 @@ functions:
       include:
         - src/MoveExportedLogs.js
         - src/DescribeExportTask.js
-        - node_modules/dateformat/**
+        - node_modules/moment/**
+        - node_modules/moment-timezone/**
     environment:
+      TIME_ZONE: ${self:custom.timeZone}
       DATE_FORMAT: ${self:provider.dateFormat}
       DATE_FOLDER_DELIMITER: ${self:provider.dateFolderDelimiter}
 
@@ -132,6 +157,7 @@ stepFunctions:
             enabled: true
             input:
               origin: 'Automated launch'
+              EXPORT_RANGE: ${self:custom.onlyLastMonthRange}
       name: exportcwlogs-${self:provider.stage}-exportCloudWatchLogsProcess
       definition:
         Comment: "Export cloudwatch logs to S3"
@@ -142,13 +168,18 @@ stepFunctions:
             Choices:
               - Variable: '$.pendingLogGroups'
                 IsPresent: false
-                Next: sendStartNotificationFunc
+                Next: setExportRangeParamFunc
             Default: passToSelect
           passToSelect:
             Type: Pass
             Parameters:
               logGroups.$: '$.pendingLogGroups'
             Next: selectLogGroupsFunc
+          setExportRangeParamFunc:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [setExportRangeParam, Arn]
+            Next: sendStartNotificationFunc
           sendStartNotificationFunc:
             Type: Task
             Resource:
@@ -348,7 +379,7 @@ resources:
           - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         Path: /
         RoleName: exportcwlogs-${self:provider.stage}-DescribeLogGroupsRole
-    ManageExportTaskRole: 
+    DescribeExportTaskRole: 
       Type: AWS::IAM::Role
       Properties: 
         AssumeRolePolicyDocument:
@@ -360,22 +391,63 @@ resources:
                 - lambda.amazonaws.com
               Action:
                 - 'sts:AssumeRole'
-        Description: 'Manage export task'
+        Description: 'Describe export task'
         ManagedPolicyArns: 
           - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         Path: /
         Policies:
-        - PolicyName: 'manage-export-task'
+        - PolicyName: 'describe-export-task'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:DescribeExportTasks'
+                Resource: '*'
+        RoleName: exportcwlogs-${self:provider.stage}-DescribeExportTaskRole
+    CreateExportTaskRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Create export task'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Path: /
+        Policies:
+        - PolicyName: 'create-export-task'
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
                   - 'logs:CreateExportTask'
-                  - 'logs:DescribeExportTasks'
                   - 'logs:CancelExportTask'
                 Resource: '*'
-        RoleName: exportcwlogs-${self:provider.stage}-ManageExportTaskRole
+        - PolicyName: 'get-export-range-parameter'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameter'
+                Resource:
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ssm:'
+                      - !Ref AWS::Region
+                      - ':'
+                      - !Ref AWS::AccountId
+                      - ':parameter/'
+                      - ${self:custom.exportRangeParameterName}
+        RoleName: exportcwlogs-${self:provider.stage}-CreateExportTaskRole
     PutRetentionPolicyRole: 
       Type: AWS::IAM::Role
       Properties: 
@@ -505,6 +577,49 @@ resources:
                       - ${self:provider.exportBucketName}
                       - '/*'
         RoleName: exportcwlogs-${self:provider.stage}-MoveS3FilesRole
+    ExportRangeParameter:
+      Type: AWS::SSM::Parameter
+      Properties: 
+        DataType: 'text'
+        Description: 'Export Cloudwatch logs date range parameter'
+        Name: ${self:custom.exportRangeParameterName}
+        Tier: 'Standard'
+        Type: 'String'
+        Value: ${self:custom.defaultExportRange}
+    PutSSMParameterRole: 
+      Type: AWS::IAM::Role
+      Properties: 
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                - lambda.amazonaws.com
+              Action:
+                - 'sts:AssumeRole'
+        Description: 'Put SSM Parameter'
+        ManagedPolicyArns: 
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Path: /
+        Policies:
+        - PolicyName: 'put-ssm-parameter-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ssm:PutParameter'
+                Resource:
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ssm:'
+                      - !Ref AWS::Region
+                      - ':'
+                      - !Ref AWS::AccountId
+                      - ':parameter/'
+                      - ${self:custom.exportRangeParameterName}
+        RoleName: exportcwlogs-${self:provider.stage}-PutSSMParameterRole
     EmptyRole: 
       Type: AWS::IAM::Role
       Properties: 
